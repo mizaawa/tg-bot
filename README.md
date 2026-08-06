@@ -62,10 +62,10 @@
    - **Project name**：设置您的项目名称（例如 `open-wegram-bot`）
    - **Production branch**：选择主分支（通常是 `master`）
    - 其他设置保持默认
-8. 配置环境变量：
-   - 点击 **Environment Variables**
+8. 完成首次部署后，打开该 Worker 的 **Settings** > **Variables and Secrets**：
    - 添加 `PREFIX`（例如：`public`）
-   - 可选：添加 `SECRET_TOKEN` 用于校验 Telegram webhook 请求，并标记为**加密**
+   - 可选：添加运行时 Secret `SECRET_TOKEN` 用于校验 Telegram webhook 请求，并重新部署
+   - Workers Builds 页面中的 **Variables and Secrets** 仅用于构建过程，不会自动成为 Worker 运行时变量
 9. 点击 **Save and Deploy** 按钮完成部署
 
 也可以在 Worker 的 **Settings** > **Bindings** 中添加 Secrets Store 绑定。请将绑定变量名设置为 `SECRET_TOKEN`；程序会自动读取 Secrets Store 中的实际值。

@@ -61,10 +61,10 @@ This is the simplest deployment method, requiring no local development environme
    - **Project name**: Set your project name (e.g., `open-wegram-bot`)
    - **Production branch**: Select your main branch (usually `master`)
    - Keep other settings as default
-8. Configure environment variables:
-   - Click on **Environment Variables**
+8. After the first deployment, open the Worker's **Settings** > **Variables and Secrets**:
    - Add `PREFIX` (e.g., `public`)
-   - Optionally add `SECRET_TOKEN` to authenticate Telegram webhook requests, and mark it as **Encrypted**
+   - Optionally add the runtime Secret `SECRET_TOKEN` to authenticate Telegram webhook requests, then redeploy
+   - **Variables and Secrets** under Workers Builds are build-time settings and are not automatically runtime Worker bindings
 9. Click **Save and Deploy** to complete the deployment
 
 You can also add a Secrets Store binding under the Worker's **Settings** > **Bindings**. Set its binding variable name to `SECRET_TOKEN`; the application will resolve the stored value automatically.
