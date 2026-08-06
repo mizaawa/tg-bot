@@ -68,6 +68,8 @@
    - 添加 `SECRET_TOKEN`（必须包含大小写字母和数字，长度至少16位），并标记为**加密**
 9. 点击 **Save and Deploy** 按钮完成部署
 
+也可以在 Worker 的 **Settings** > **Bindings** 中添加 Secrets Store 绑定。请将绑定变量名设置为 `SECRET_TOKEN`；程序会自动读取 Secrets Store 中的实际值。
+
 这种方式的优点是：当您更新 GitHub 仓库时，Cloudflare 会自动重新部署您的 Worker。
 
 #### 方法二：Vercel 一键部署

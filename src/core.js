@@ -4,7 +4,7 @@
  */
 
 export function validateSecretToken(token) {
-    return token.length > 15 && /[A-Z]/.test(token) && /[a-z]/.test(token) && /[0-9]/.test(token);
+    return typeof token === 'string' && token.length > 15 && /[A-Z]/.test(token) && /[a-z]/.test(token) && /[0-9]/.test(token);
 }
 
 export function jsonResponse(data, status = 200) {

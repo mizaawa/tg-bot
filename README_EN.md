@@ -67,6 +67,8 @@ This is the simplest deployment method, requiring no local development environme
    - Add `SECRET_TOKEN` (must contain uppercase and lowercase letters and numbers, at least 16 characters long), and mark it as **Encrypted**
 9. Click **Save and Deploy** to complete the deployment
 
+You can also add a Secrets Store binding under the Worker's **Settings** > **Bindings**. Set its binding variable name to `SECRET_TOKEN`; the application will resolve the stored value automatically.
+
 The advantage of this method is that when you update your GitHub repository, Cloudflare will automatically redeploy your Worker.
 
 #### Method 2: Vercel One-Click Deployment
