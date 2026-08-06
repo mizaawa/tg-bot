@@ -49,6 +49,42 @@ test('uses the value from a Secrets Store binding when installing a webhook', as
     assert.equal(JSON.parse(telegramRequest.init.body).secret_token, SECRET_TOKEN);
 });
 
+test('installs a webhook without a secret token when no binding exists', async (t) => {
+    let telegramBody;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+        telegramBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ok: true}), {
+            headers: {'Content-Type': 'application/json'}
+        });
+    };
+    t.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    const response = await worker.fetch(
+        new Request('https://example.com/public/install/123456/telegram-bot-token'),
+        {}
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal('secret_token' in telegramBody, false);
+});
+
+test('accepts a webhook without a secret header when no binding exists', async () => {
+    const response = await worker.fetch(
+        new Request('https://example.com/public/webhook/123456/telegram-bot-token', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: '{}'
+        }),
+        {}
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), 'OK');
+});
+
 test('reports a Secrets Store read failure without calling Telegram', async (t) => {
     const originalFetch = globalThis.fetch;
     const originalConsoleError = console.error;

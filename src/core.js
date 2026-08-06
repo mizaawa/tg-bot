@@ -3,10 +3,6 @@
  * Shared code between Cloudflare Worker and Vercel deployments
  */
 
-export function validateSecretToken(token) {
-    return typeof token === 'string' && token.length > 15 && /[A-Z]/.test(token) && /[a-z]/.test(token) && /[0-9]/.test(token);
-}
-
 export function jsonResponse(data, status = 200) {
     return new Response(JSON.stringify(data), {
         status,
@@ -23,23 +19,20 @@ export async function postToTelegramApi(token, method, body) {
 }
 
 export async function handleInstall(request, ownerUid, botToken, prefix, secretToken) {
-    if (!validateSecretToken(secretToken)) {
-        return jsonResponse({
-            success: false,
-            message: 'Secret token must be at least 16 characters and contain uppercase letters, lowercase letters, and numbers.'
-        }, 400);
-    }
-
     const url = new URL(request.url);
     const baseUrl = `${url.protocol}//${url.hostname}`;
     const webhookUrl = `${baseUrl}/${prefix}/webhook/${ownerUid}/${botToken}`;
 
     try {
-        const response = await postToTelegramApi(botToken, 'setWebhook', {
+        const webhook = {
             url: webhookUrl,
-            allowed_updates: ['message'],
-            secret_token: secretToken
-        });
+            allowed_updates: ['message']
+        };
+        if (secretToken) {
+            webhook.secret_token = secretToken;
+        }
+
+        const response = await postToTelegramApi(botToken, 'setWebhook', webhook);
 
         const result = await response.json();
         if (result.ok) {
@@ -52,14 +45,7 @@ export async function handleInstall(request, ownerUid, botToken, prefix, secretT
     }
 }
 
-export async function handleUninstall(botToken, secretToken) {
-    if (!validateSecretToken(secretToken)) {
-        return jsonResponse({
-            success: false,
-            message: 'Secret token must be at least 16 characters and contain uppercase letters, lowercase letters, and numbers.'
-        }, 400);
-    }
-
+export async function handleUninstall(botToken) {
     try {
         const response = await postToTelegramApi(botToken, 'deleteWebhook', {})
 
@@ -75,7 +61,7 @@ export async function handleUninstall(botToken, secretToken) {
 }
 
 export async function handleWebhook(request, ownerUid, botToken, secretToken) {
-    if (secretToken !== request.headers.get('X-Telegram-Bot-Api-Secret-Token')) {
+    if (secretToken && secretToken !== request.headers.get('X-Telegram-Bot-Api-Secret-Token')) {
         return new Response('Unauthorized', {status: 401});
     }
 
@@ -161,7 +147,7 @@ export async function handleRequest(request, config) {
     }
 
     if (match = path.match(UNINSTALL_PATTERN)) {
-        return handleUninstall(match[1], secretToken);
+        return handleUninstall(match[1]);
     }
 
     if (match = path.match(WEBHOOK_PATTERN)) {

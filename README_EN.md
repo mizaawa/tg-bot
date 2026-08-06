@@ -64,7 +64,7 @@ This is the simplest deployment method, requiring no local development environme
 8. Configure environment variables:
    - Click on **Environment Variables**
    - Add `PREFIX` (e.g., `public`)
-   - Add `SECRET_TOKEN` (must contain uppercase and lowercase letters and numbers, at least 16 characters long), and mark it as **Encrypted**
+   - Optionally add `SECRET_TOKEN` to authenticate Telegram webhook requests, and mark it as **Encrypted**
 9. Click **Save and Deploy** to complete the deployment
 
 You can also add a Secrets Store binding under the Worker's **Settings** > **Bindings**. Set its binding variable name to `SECRET_TOKEN`; the application will resolve the stored value automatically.
@@ -82,7 +82,7 @@ Vercel provides another simple deployment option, also supporting automatic depl
 2. Follow Vercel's prompts to complete the deployment process
 3. Configure environment variables:
    - `PREFIX`: Set to your desired URL prefix (e.g., `public`)
-   - `SECRET_TOKEN`: Set a secure token (must contain uppercase and lowercase letters and numbers, at least 16 characters long)
+   - `SECRET_TOKEN`: Optional token used to authenticate Telegram webhook requests
 4. After deployment, Vercel will provide a domain like `your-project.vercel.app`
 
 The advantages of Vercel deployment are simplicity, automatic updates, and built-in HTTPS.
@@ -121,7 +121,7 @@ If you prefer not to use GitHub or command-line tools, you can create the Worker
 5. Click **Save and Deploy**
 6. Add environment variables in the Worker settings:
    - `PREFIX` (e.g., `public`)
-   - `SECRET_TOKEN` (must contain uppercase and lowercase letters and numbers, at least 16 characters long)
+   - `SECRET_TOKEN` (optional, used to authenticate Telegram webhook requests)
 
 #### Method 5: Deno One-Click Deployment
 
@@ -134,7 +134,7 @@ Deno provides another simple deployment method, which also supports automatic de
 5. Click the **Deploy Project** button and wait for the deployment to complete
 6. Click the **Add environment variables** button at the bottom of the page to add environment variables:
    - `PREFIX`: URL prefix, for example `public`
-   - `SECRET_TOKEN`: Encryption token, must include uppercase and lowercase letters and numbers, with a minimum length of 16 characters
+   - `SECRET_TOKEN`: Optional webhook authentication token
 7. After clicking the **Save (2 new)** button to save the environment variables, the deployment is complete. The domain name provided by Deno is above the environment variables, such as `project-name.deno.dev`
 
 #### Method 6: Netlify One-Click Deployment
@@ -147,7 +147,7 @@ Netlify provides another simple deployment method, which also supports automatic
 4. Fill in the **Site name** and add environment variables:
    - Click **Add environment variables** -> **Add key/value pairs**
    - `NETLIFY_PREFIX`: URL prefix, for example `public`
-   - `SECRET_TOKEN`: Encryption token, must include uppercase and lowercase letters and numbers, with a minimum length of 16 characters
+   - `SECRET_TOKEN`: Optional webhook authentication token
 5. Click the **Deploy xxx** button, and after the deployment is complete, you can see the Netlify-provided domain name under the site name, such as `site-name.netlify.app`
 
 #### Method 7: EdgeOne One-Click Deployment
@@ -159,7 +159,7 @@ EdgeOne provides another simple deployment method, which also supports automatic
 3. Select the authorized GitHub account and choose your forked repository
 4. Add environment variables:
 - `EDGEONE_PREFIX`: URL prefix, for example `public`
-- `SECRET_TOKEN`: Encryption token, must include uppercase and lowercase letters and numbers, with a minimum length of 16 characters
+- `SECRET_TOKEN`: Optional webhook authentication token
 5. Click the **Start Deployment** button, and after the deployment is complete, go to **Project Settings** -> **Domain Management** to add a custom domain. The default domain `project-name.edgeone.app` only supports preview, and its validity period is only 3 hours!
 
 ### 3.1 (Optional) Bind a Custom Domain 🌐
@@ -251,7 +251,7 @@ If you anticipate higher usage, consider upgrading to Cloudflare's paid plan.
 - **Messages not forwarded**: Ensure the Bot is correctly registered and check the Worker logs
 - **Cannot access registration URL**: Try using a custom domain to solve access issues
 - **Reply message fails**: Check if you're correctly using Telegram's reply function
-- **Registration fails**: Ensure your `SECRET_TOKEN` meets the requirements (contains uppercase and lowercase letters and numbers, at least 16 characters long)
+- **Registration fails**: Check the error returned by Telegram and verify the bot token and webhook URL
 - **GitHub deployment fails**: Check if your environment variables are correctly set and repository permissions are correct
 - **Worker deployment fails**: Check your Wrangler configuration and ensure you're logged in to Cloudflare
 

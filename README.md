@@ -65,7 +65,7 @@
 8. 配置环境变量：
    - 点击 **Environment Variables**
    - 添加 `PREFIX`（例如：`public`）
-   - 添加 `SECRET_TOKEN`（必须包含大小写字母和数字，长度至少16位），并标记为**加密**
+   - 可选：添加 `SECRET_TOKEN` 用于校验 Telegram webhook 请求，并标记为**加密**
 9. 点击 **Save and Deploy** 按钮完成部署
 
 也可以在 Worker 的 **Settings** > **Bindings** 中添加 Secrets Store 绑定。请将绑定变量名设置为 `SECRET_TOKEN`；程序会自动读取 Secrets Store 中的实际值。
@@ -83,7 +83,7 @@ Vercel 提供了另一种简单的部署方式，也支持从 GitHub 仓库自�
 2. 按照 Vercel 的提示完成部署流程
 3. 配置环境变量：
    - `PREFIX`：设置为您想要的 URL 前缀（例如 `public`）
-   - `SECRET_TOKEN`：设置一个安全的令牌（必须包含大小写字母和数字，长度至少16位）
+   - `SECRET_TOKEN`：可选，用于校验 Telegram webhook 请求
 4. 完成部署后，Vercel 会提供一个域名，如 `your-project.vercel.app`
 
 Vercel 部署的优点是简单快速，支持自动更新，并且默认提供 HTTPS。
@@ -122,7 +122,7 @@ Vercel 部署的优点是简单快速，支持自动更新，并且默认提供 
 5. 点击 **Save and Deploy**
 6. 在 Worker 设置中添加环境变量：
    - `PREFIX`（例如：`public`）
-   - `SECRET_TOKEN`（必须包含大小写字母和数字，长度至少16位）
+   - `SECRET_TOKEN`（可选，用于校验 Telegram webhook 请求）
 
 #### 方法五：Deno 一键部署
 
@@ -135,7 +135,7 @@ Deno 提供了另一种简单的部署方式，也支持从 GitHub 仓库自动�
 5. 点击 **Deploy Project** 按钮，等待部署完成
 6. 点击页面底部 **Add environment variables** 按钮，添加环境变量：
    - `PREFIX`：URL前缀，例如 `public`
-   - `SECRET_TOKEN`：加密令牌，必须包含大小写字母和数字，长度至少16位
+   - `SECRET_TOKEN`：可选的 webhook 校验令牌
 7. 点击 **Save (2 new)** 按钮保存环境变量后即完成部署，环境变量上方即为 Deno 提供的域名，如 `project-name.deno.dev`
 
 #### 方法六：Netlify 一键部署
@@ -149,7 +149,7 @@ Import an existing project**
 4. 填写 **Site name** 并添加环境变量：
    - 点击 **Add environment variables** -> **Add key/value pairs**
    - `NETLIFY_PREFIX`：URL前缀，例如 `public`
-   - `SECRET_TOKEN`：加密令牌，必须包含大小写字母和数字，长度至少16位
+   - `SECRET_TOKEN`：可选的 webhook 校验令牌
 5. 点击 **Deploy xxx** 按钮，部署完成后即可在站点名称下看到 Netlify 提供的域名，如 `site-name.netlify.app`
 
 #### 方法七：EdgeOne 一键部署
@@ -161,7 +161,7 @@ EdgeOne 提供了另一种简单的部署方式，也支持从 GitHub 仓库自�
 3. 选择已授权的 GitHub 账户并选择您的 Fork 仓库
 4. 添加环境变量：
    - `EDGEONE_PREFIX`：URL前缀，例如 `public`
-   - `SECRET_TOKEN`：加密令牌，必须包含大小写字母和数字，长度至少16位
+   - `SECRET_TOKEN`：可选的 webhook 校验令牌
 5. 点击 **开始部署** 按钮，部署完成后转到 **项目设置** -> **域名管理** 添加自定义域名，默认域名 `project-name.edgeone.app` 只支持预览，有效期仅 3 个小时！
 
 ### 3.1 (可选) 绑定自定义域名 🌐
@@ -256,7 +256,7 @@ https://your-worker-url/YOUR_PREFIX/uninstall/BOT_API_TOKEN
 - **消息未转发**: 确保 Bot 已正确注册，并检查 Worker 日志
 - **无法访问注册 URL**: 确认您是否相信科学，或者考虑绑定自定义域名解决访问问题
 - **回复消息失败**: 检查您是否正确使用 Telegram 的回复功能
-- **注册失败**: 确保您的 `SECRET_TOKEN` 符合要求（包含大小写字母和数字，长度至少16位）
+- **注册失败**: 检查 Telegram 返回的错误，并确认机器人令牌和 webhook 地址正确
 - **GitHub 部署失败**: 检查环境变量是否正确设置，仓库权限是否正确
 - **Worker 部署失败**: 检查 Wrangler 配置并确保您已登录到 Cloudflare
 
