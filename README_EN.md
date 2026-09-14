@@ -11,7 +11,8 @@ Users can send messages to you through your bot, and you can reply directly to t
 ## ✨ Features
 
 - 🔄 **Two-Way Communication** - Easily receive and reply to messages from users
-- 💾 **No Database Required** - Completely stateless design, zero storage costs
+- 🚫 **One-Click Blocking** - Stop receiving future messages from an account from the forwarded message
+- 💾 **No Database Required** - No database is needed by default; optional Cloudflare KV keeps blocklists across restarts
 - 🌐 **No Personal Domain Required** - Use the free domain provided by Cloudflare Worker
 - 🚀 **Lightweight Deployment** - Complete setup within minutes
 - 💰 **Zero Running Cost** - Operates within Cloudflare's free plan limits
@@ -65,7 +66,10 @@ This is the simplest deployment method, requiring no local development environme
    - Add `PREFIX` (e.g., `public`)
    - Optionally add the runtime Secret `SECRET_TOKEN` to authenticate Telegram webhook requests, then redeploy
    - **Variables and Secrets** under Workers Builds are build-time settings and are not automatically runtime Worker bindings
-9. Click **Save and Deploy** to complete the deployment
+9. To keep the blocklist across Worker restarts and multiple instances, create a Cloudflare KV namespace and bind it as `BLOCKLIST` under **Settings** > **Bindings**. Without this binding, the blocklist only lasts for the current runtime instance.
+10. Click **Save and Deploy** to complete the deployment
+
+With Wrangler, run `npx wrangler kv namespace create BLOCKLIST` first, then put the returned namespace ID into the `BLOCKLIST` configuration in `wrangler.toml`.
 
 You can also add a Secrets Store binding under the Worker's **Settings** > **Bindings**. Set its binding variable name to `SECRET_TOKEN`; the application will resolve the stored value automatically.
 
@@ -117,7 +121,7 @@ If you prefer not to use GitHub or command-line tools, you can create the Worker
 1. Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com/)
 2. Navigate to the **Workers & Pages** section
 3. Click **Create Worker**
-4. Delete the default code and paste the code from this project's `src/worker.js` and `src/core.js`
+4. Delete the default code and upload `src/worker.js`, `src/core.js`, and `src/blocklist.js` with the same directory structure (`core.js` imports the latter)
 5. Click **Save and Deploy**
 6. Add environment variables in the Worker settings:
    - `PREFIX` (e.g., `public`)
@@ -209,6 +213,12 @@ https://open-wegram-bot.username.workers.dev/public/install/123456789/000000000:
 ### Receiving Messages 📩
 
 Once set up, any messages sent to your Bot will be forwarded to your Telegram account, with sender information displayed below the message.
+
+Click **🚫 Block this account** below a forwarded message to silently discard future messages from that account. Configure the `BLOCKLIST` KV binding as described above if the list must survive restarts.
+
+After upgrading to this version, visit the install URL once more so Telegram updates the webhook to deliver button callbacks.
+
+Vercel, Deno, Netlify, and EdgeOne do not create a shared KV automatically. Those deployments need a compatible persistent adapter in the entry point; otherwise the fallback list is limited to the current runtime instance.
 
 ### Replying to Messages 📤
 

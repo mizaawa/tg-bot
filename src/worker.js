@@ -20,7 +20,9 @@ export async function resolveSecretToken(binding) {
 }
 
 export default {
-    async fetch(request, env, ctx) {
+    async fetch(request, env = {}, ctx) {
+        env = env || {};
+
         let secretToken;
         try {
             secretToken = await resolveSecretToken(env.SECRET_TOKEN);
@@ -34,7 +36,20 @@ export default {
 
         const config = {
             prefix: env.PREFIX || 'public',
-            secretToken
+            secretToken,
+            // BLOCKLIST is a Cloudflare KV namespace binding. The aliases keep
+            // existing deployments flexible while the documented name remains
+            // BLOCKLIST.
+            blocklist: [
+                env.BLOCKLIST,
+                env.BLACKLIST,
+                env.BLOCKLIST_KV,
+                env.BLACKLIST_KV,
+                env.STATE_KV
+            ]
+                .find(binding => Array.isArray(binding) || (binding && typeof binding === 'object' && [
+                    'get', 'put', 'has', 'set', 'add', 'isBlocked', 'contains', 'block', 'addBlocked'
+                ].some(method => typeof binding[method] === 'function'))) || null
         };
 
         return handleRequest(request, config);

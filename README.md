@@ -11,7 +11,8 @@
 ## ✨ 特色功能
 
 - 🔄 **双向通信** - 轻松接收和回复来自用户的消息
-- 💾 **无需数据库** - 完全无状态设计，零存储成本
+- 🚫 **一键拉黑** - 点击转发消息下方的按钮即可停止接收指定账号的后续消息
+- 💾 **无需数据库** - 不配置拉黑持久化时无需数据库；需要跨重启保存名单时可选 Cloudflare KV
 - 🌐 **无需自己的域名** - 使用 Cloudflare Worker 提供的免费域名
 - 🚀 **轻量级部署** - 几分钟内即可完成设置
 - 💰 **零成本运行** - 在 Cloudflare 免费计划范围内使用
@@ -66,7 +67,10 @@
    - 添加 `PREFIX`（例如：`public`）
    - 可选：添加运行时 Secret `SECRET_TOKEN` 用于校验 Telegram webhook 请求，并重新部署
    - Workers Builds 页面中的 **Variables and Secrets** 仅用于构建过程，不会自动成为 Worker 运行时变量
-9. 点击 **Save and Deploy** 按钮完成部署
+9. 如需让拉黑名单在 Worker 重启和多实例之间保持有效，请创建一个 Cloudflare KV namespace，并在 **Settings** > **Bindings** 中以 `BLOCKLIST` 为变量名绑定它。没有此绑定时，拉黑状态只在当前运行实例中保留。
+10. 点击 **Save and Deploy** 按钮完成部署
+
+使用 Wrangler 时，可以先运行 `npx wrangler kv namespace create BLOCKLIST`，再将命令返回的 namespace ID 填入 `wrangler.toml` 的 `BLOCKLIST` 配置。
 
 也可以在 Worker 的 **Settings** > **Bindings** 中添加 Secrets Store 绑定。请将绑定变量名设置为 `SECRET_TOKEN`；程序会自动读取 Secrets Store 中的实际值。
 
@@ -118,7 +122,7 @@ Vercel 部署的优点是简单快速，支持自动更新，并且默认提供 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
 2. 导航到 **Workers & Pages** 页面
 3. 点击 **Create Worker**
-4. 删除默认代码，粘贴本项目的 `src/worker.js` 和 `src/core.js` 代码
+4. 删除默认代码，按项目目录结构上传 `src/worker.js`、`src/core.js` 和 `src/blocklist.js`（`core.js` 依赖后者）
 5. 点击 **Save and Deploy**
 6. 在 Worker 设置中添加环境变量：
    - `PREFIX`（例如：`public`）
@@ -214,6 +218,12 @@ https://open-wegram-bot.username.workers.dev/public/install/123456789/000000000:
 ### 接收消息 📩
 
 一旦设置完成，任何人给您的 Bot 发送消息，您都会在自己的 Telegram 账号中收到这些消息，并且消息下方会显示发送者的信息。
+
+点击消息下方的 **🚫 拉黑此账号** 按钮后，该账号的新消息会被机器人静默丢弃，不再转发给您。要让名单持久保存，请按上面的说明配置 `BLOCKLIST` KV 绑定。
+
+升级到支持拉黑的版本后，请重新访问一次安装地址，让 Telegram webhook 开始接收按钮回调。
+
+Vercel、Deno、Netlify 和 EdgeOne 部署没有自动创建的共享 KV；这些平台需要在入口中接入兼容的持久化存储，否则只能使用当前运行实例的临时名单。
 
 ### 回复消息 📤
 
