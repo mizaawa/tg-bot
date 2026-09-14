@@ -47,9 +47,17 @@ export default {
                 env.BLACKLIST_KV,
                 env.STATE_KV
             ]
-                .find(binding => Array.isArray(binding) || (binding && typeof binding === 'object' && [
-                    'get', 'put', 'has', 'set', 'add', 'isBlocked', 'contains', 'block', 'addBlocked'
-                ].some(method => typeof binding[method] === 'function'))) || null
+                .find(binding => Array.isArray(binding) || (binding && typeof binding === 'object' && (
+                    [
+                        'get', 'put', 'has', 'set', 'add', 'delete', 'remove', 'isBlocked', 'contains',
+                        'block', 'addBlocked', 'unblock', 'removeBlocked', 'rememberUsername',
+                        'recordUsername', 'lookupUsername', 'getUsernameUid', 'setUsername', 'getUsername'
+                    ].some(method => typeof binding[method] === 'function') ||
+                    [
+                        'blocklist', 'blacklist', 'blacklistStore', 'blocklistStore', 'blockStore',
+                        'storage', 'store', 'kv', 'stateStore', 'state'
+                    ].some(method => binding[method])
+                ))) || null
         };
 
         return handleRequest(request, config);

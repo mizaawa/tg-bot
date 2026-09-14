@@ -439,3 +439,221 @@ test('accepts a nested blocklist store when calling the webhook handler directly
     assert.equal(response.status, 200);
     assert.equal(blocked.size, 1);
 });
+
+test('lets the owner ban and recover a previously seen username', async (t) => {
+    const values = new Map();
+    const telegramCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+        const body = JSON.parse(init.body);
+        telegramCalls.push({url, body});
+        return new Response(JSON.stringify({ok: true}));
+    };
+    t.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    const webhookUrl = 'https://example.com/public/webhook/123456/telegram-bot-token';
+    const request = (body) => new Request(webhookUrl, {
+        method: 'POST',
+        body: JSON.stringify(body)
+    });
+
+    await worker.fetch(request({
+        message: {
+            chat: {id: 777888, username: 'Alice'},
+            from: {id: 777888, username: 'Alice'},
+            message_id: 50,
+            text: 'hello'
+        }
+    }), {BLOCKLIST: values});
+
+    assert.equal(values.get('user:h24ccbb4a:123456:alice'), '777888');
+
+    await worker.fetch(request({
+        message: {chat: {id: 123456}, message_id: 51, text: '/ban @ALICE'}
+    }), {BLOCKLIST: values});
+
+    assert.equal(values.get('blocked:h24ccbb4a:123456:777888'), '1');
+    assert.equal(telegramCalls.at(-1).url.endsWith('/sendMessage'), true);
+    assert.match(telegramCalls.at(-1).body.text, /@alice/);
+
+    const callsAfterBan = telegramCalls.length;
+    await worker.fetch(request({
+        message: {chat: {id: 777888, username: 'Alice'}, message_id: 52, text: 'blocked'}
+    }), {BLOCKLIST: values});
+    assert.equal(telegramCalls.length, callsAfterBan);
+
+    await worker.fetch(request({
+        message: {chat: {id: 123456}, message_id: 53, text: '/recover @alice'}
+    }), {BLOCKLIST: values});
+
+    assert.equal(values.has('blocked:h24ccbb4a:123456:777888'), false);
+    assert.match(telegramCalls.at(-1).body.text, /@alice/);
+
+    await worker.fetch(request({
+        message: {chat: {id: 777888, username: 'Alice'}, message_id: 54, text: 'hello again'}
+    }), {BLOCKLIST: values});
+    assert.equal(telegramCalls.filter(call => call.url.endsWith('/copyMessage')).length, 2);
+});
+
+test('changes the callback button between block and recovery states', async (t) => {
+    const blocked = new Set();
+    const telegramCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+        const body = JSON.parse(init.body);
+        telegramCalls.push({url, body});
+        return new Response(JSON.stringify({ok: true}));
+    };
+    t.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    const webhookUrl = 'https://example.com/public/webhook/123456/telegram-bot-token';
+    const request = (body) => new Request(webhookUrl, {
+        method: 'POST',
+        body: JSON.stringify(body)
+    });
+    const keyboard = {
+        inline_keyboard: [[
+            {text: 'From Alice', url: 'tg://user?id=777888'},
+            {text: '🚫 拉黑此账号', callback_data: 'block:777888'}
+        ]]
+    };
+
+    await worker.fetch(request({
+        callback_query: {
+            id: 'callback-toggle-1',
+            from: {id: 123456},
+            message: {chat: {id: 123456}, message_id: 60, reply_markup: keyboard},
+            data: 'block:777888'
+        }
+    }), {BLOCKLIST: blocked});
+
+    assert.equal(blocked.has('blocked:h24ccbb4a:123456:777888'), true);
+    const editAfterBlock = telegramCalls.find(call => call.url.endsWith('/editMessageReplyMarkup'));
+    assert.equal(editAfterBlock.body.reply_markup.inline_keyboard[0][1].callback_data, 'unblock:777888');
+    assert.equal(editAfterBlock.body.reply_markup.inline_keyboard[0][1].text, '✅ 恢复此账号');
+
+    await worker.fetch(request({
+        callback_query: {
+            id: 'callback-toggle-2',
+            from: {id: 123456},
+            message: {
+                chat: {id: 123456},
+                message_id: 60,
+                reply_markup: editAfterBlock.body.reply_markup
+            },
+            data: 'unblock:777888'
+        }
+    }), {BLOCKLIST: blocked});
+
+    assert.equal(blocked.has('blocked:h24ccbb4a:123456:777888'), false);
+    const edits = telegramCalls.filter(call => call.url.endsWith('/editMessageReplyMarkup'));
+    assert.equal(edits.at(-1).body.reply_markup.inline_keyboard[0][1].callback_data, 'block:777888');
+});
+
+test('does not treat a non-owner management command as an administrative action', async (t) => {
+    const blocked = new Set();
+    const telegramCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+        const body = JSON.parse(init.body);
+        telegramCalls.push({url, body});
+        return new Response(JSON.stringify({ok: true}));
+    };
+    t.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    const response = await worker.fetch(
+        new Request('https://example.com/public/webhook/123456/telegram-bot-token', {
+            method: 'POST',
+            body: JSON.stringify({
+                message: {
+                    chat: {id: 777888, username: 'Alice'},
+                    from: {id: 777888, username: 'Alice'},
+                    message_id: 70,
+                    text: '/ban @someone'
+                }
+            })
+        }),
+        {BLOCKLIST: blocked}
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(blocked.size, 0);
+    assert.equal(telegramCalls.filter(call => call.url.endsWith('/copyMessage')).length, 1);
+    assert.equal(telegramCalls.filter(call => call.url.endsWith('/sendMessage')).length, 0);
+});
+
+test('does not trust a command with a mismatched sender in the owner chat', async (t) => {
+    const blocked = new Set();
+    const telegramCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+        const body = JSON.parse(init.body);
+        telegramCalls.push({url, body});
+        return new Response(JSON.stringify({ok: true}));
+    };
+    t.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    const webhookUrl = 'https://example.com/public/webhook/123456/telegram-bot-token';
+    const request = (body) => new Request(webhookUrl, {
+        method: 'POST',
+        body: JSON.stringify(body)
+    });
+
+    await worker.fetch(request({
+        message: {
+            chat: {id: 777888, username: 'Alice'},
+            from: {id: 777888, username: 'Alice'},
+            message_id: 90,
+            text: 'hello'
+        }
+    }), {BLOCKLIST: blocked});
+
+    await worker.fetch(request({
+        message: {
+            chat: {id: 123456},
+            from: {id: 999999},
+            message_id: 91,
+            text: '/ban @alice'
+        }
+    }), {BLOCKLIST: blocked});
+
+    assert.equal(blocked.size, 0);
+    assert.equal(telegramCalls.filter(call => call.url.endsWith('/sendMessage')).length, 0);
+});
+
+test('reports an unknown username without changing the blocklist', async (t) => {
+    const blocked = new Set();
+    const telegramCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+        const body = JSON.parse(init.body);
+        telegramCalls.push({url, body});
+        return new Response(JSON.stringify({ok: true}));
+    };
+    t.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    await worker.fetch(
+        new Request('https://example.com/public/webhook/123456/telegram-bot-token', {
+            method: 'POST',
+            body: JSON.stringify({
+                message: {chat: {id: 123456}, message_id: 80, text: '/ban @never_seen'}
+            })
+        }),
+        {BLOCKLIST: blocked}
+    );
+
+    const feedback = telegramCalls.find(call => call.url.endsWith('/sendMessage'));
+    assert.ok(feedback);
+    assert.match(feedback.body.text, /never_seen/);
+    assert.equal(blocked.size, 0);
+});

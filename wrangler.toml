@@ -7,7 +7,7 @@ keep_vars = true
 mode = "smart"
 
 # Create a KV namespace and replace the placeholder id before deploying if the
-# blacklist should survive Worker restarts and be shared by all instances.
+# blacklist and username index should survive Worker restarts and be shared by all instances.
 # [[kv_namespaces]]
 # binding = "BLOCKLIST"
 # id = "replace-with-your-kv-namespace-id"

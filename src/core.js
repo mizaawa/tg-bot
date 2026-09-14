@@ -3,7 +3,15 @@
  * Shared code between Cloudflare Worker and Vercel deployments
  */
 
-import {addBlocked, isBlocked, resolveBlocklistStore} from './blocklist.js';
+import {
+    addBlocked,
+    isBlocked,
+    lookupUsername,
+    normalizeUsername,
+    rememberUsername,
+    removeBlocked,
+    resolveBlocklistStore
+} from './blocklist.js';
 
 export function jsonResponse(data, status = 200) {
     return new Response(JSON.stringify(data), {
@@ -90,6 +98,185 @@ async function answerCallbackQuery(botToken, callbackQueryId, text) {
     }
 }
 
+async function sendOwnerMessage(botToken, ownerUid, text) {
+    try {
+        await postToTelegramApi(botToken, 'sendMessage', {
+            chat_id: parseInt(ownerUid),
+            text
+        });
+    } catch (error) {
+        // Management feedback must not make Telegram retry the webhook. The
+        // state operation itself is handled by the caller before this point.
+        console.error('Error sending management message:', error);
+    }
+}
+
+function cloneInlineKeyboard(keyboard) {
+    if (!Array.isArray(keyboard)) {
+        return [];
+    }
+
+    return keyboard
+        .filter(row => Array.isArray(row))
+        .map(row => row
+            .filter(button => button && typeof button === 'object')
+            .map(button => ({...button})));
+}
+
+function stateKeyboardForCallback(callbackQuery, senderUid, blocked) {
+    const message = callbackQuery && callbackQuery.message;
+    const current = message && message.reply_markup && message.reply_markup.inline_keyboard;
+    const keyboard = cloneInlineKeyboard(current);
+    const action = {
+        text: blocked ? '✅ 恢复此账号' : '🚫 拉黑此账号',
+        callback_data: `${blocked ? 'unblock' : 'block'}:${senderUid}`
+    };
+
+    let replaced = false;
+    for (const row of keyboard) {
+        for (let index = 0; index < row.length; index += 1) {
+            const callbackData = row[index] && row[index].callback_data;
+            if (typeof callbackData === 'string' && /^(?:block|unblock):-?\d+$/.test(callbackData)) {
+                row[index] = action;
+                replaced = true;
+            }
+        }
+    }
+
+    if (!replaced) {
+        if (!keyboard.length) {
+            keyboard.push([]);
+        }
+        keyboard[0].push(action);
+    }
+
+    return {inline_keyboard: keyboard};
+}
+
+async function editCallbackKeyboard(botToken, callbackQuery, senderUid, blocked) {
+    const message = callbackQuery && callbackQuery.message;
+    if (!message || message.chat === undefined || message.message_id === undefined) {
+        return;
+    }
+
+    // Telegram includes the original inline keyboard in callback updates. If
+    // an old/test update omits it, avoid issuing an edit with a guessed
+    // keyboard and retain the acknowledgement-only behavior.
+    const currentKeyboard = message.reply_markup && message.reply_markup.inline_keyboard;
+    if (!Array.isArray(currentKeyboard)) {
+        return;
+    }
+
+    try {
+        await postToTelegramApi(botToken, 'editMessageReplyMarkup', {
+            chat_id: message.chat.id,
+            message_id: message.message_id,
+            reply_markup: stateKeyboardForCallback(callbackQuery, senderUid, blocked)
+        });
+    } catch (error) {
+        // A stale/deleted forwarded message should not undo a successful list
+        // mutation. The next webhook can still use the persisted state.
+        console.error('Error editing blacklist button:', error);
+    }
+}
+
+function parseManagementCommand(text) {
+    if (typeof text !== 'string') {
+        return null;
+    }
+
+    const match = text.trim().match(/^\/(ban|recover)(?:@[A-Za-z0-9_]+)?(?:\s+(.+?))?$/i);
+    if (!match) {
+        return null;
+    }
+
+    return {
+        action: match[1].toLowerCase(),
+        username: match[2] ? match[2].trim() : ''
+    };
+}
+
+function validManagementUsername(username) {
+    const normalized = normalizeUsername(username);
+    return /^[A-Za-z0-9_]{1,64}$/.test(normalized) ? normalized : '';
+}
+
+async function rememberMessageUser(blocklist, ownerUid, message, botToken) {
+    const candidates = [];
+    const from = message && message.from;
+    const chat = message && message.chat;
+
+    if (from && from.username && from.id !== undefined && from.id !== null) {
+        candidates.push({username: from.username, uid: from.id});
+    }
+    if (chat && chat.username && chat.id !== undefined && chat.id !== null) {
+        candidates.push({username: chat.username, uid: chat.id});
+    }
+
+    const seen = new Set();
+    for (const candidate of candidates) {
+        const normalized = normalizeUsername(candidate.username);
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        try {
+            await rememberUsername(blocklist, ownerUid, normalized, candidate.uid, botToken);
+        } catch (error) {
+            // Username indexing is an enhancement for command lookup. A KV
+            // outage must not prevent the normal message path from running.
+            console.error('Error remembering Telegram username:', error);
+        }
+    }
+}
+
+async function handleManagementCommand(command, ownerUid, botToken, blocklist) {
+    const username = validManagementUsername(command.username);
+    if (!username) {
+        await sendOwnerMessage(
+            botToken,
+            ownerUid,
+            `用法：/${command.action} @用户名`
+        );
+        return;
+    }
+
+    let senderUid;
+    try {
+        senderUid = await lookupUsername(blocklist, ownerUid, username, botToken);
+    } catch (error) {
+        console.error('Error looking up Telegram username:', error);
+        await sendOwnerMessage(botToken, ownerUid, '暂时无法查询该账号，请稍后重试');
+        return;
+    }
+
+    if (senderUid === null || senderUid === undefined || senderUid === '') {
+        await sendOwnerMessage(
+            botToken,
+            ownerUid,
+            `未找到 @${username}。请先让该账号给 Bot 发送过消息。`
+        );
+        return;
+    }
+
+    try {
+        if (command.action === 'ban') {
+            await addBlocked(blocklist, ownerUid, senderUid, botToken);
+            await sendOwnerMessage(botToken, ownerUid, `已拉黑 @${username}`);
+        } else {
+            await removeBlocked(blocklist, ownerUid, senderUid, botToken);
+            await sendOwnerMessage(botToken, ownerUid, `已恢复 @${username}`);
+        }
+    } catch (error) {
+        console.error(`Error handling /${command.action}:`, error);
+        await sendOwnerMessage(
+            botToken,
+            ownerUid,
+            `暂时无法${command.action === 'ban' ? '拉黑' : '恢复'}该账号，请稍后重试`
+        );
+    }
+}
+
 export async function handleInstall(request, ownerUid, botToken, prefix, secretToken) {
     const url = new URL(request.url);
     const baseUrl = `${url.protocol}//${url.hostname}`;
@@ -148,7 +335,7 @@ async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist)
     }
 
     const data = callbackQuery.data === undefined || callbackQuery.data === null ? '' : String(callbackQuery.data);
-    const match = data.match(/^block:(-?\d+)$/);
+    const match = data.match(/^(block|unblock):(-?\d+)$/);
     if (!match) {
         // The first sender button used raw numeric callback data in older
         // forwarded messages. Keep those callbacks inert and silent.
@@ -161,14 +348,31 @@ async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist)
     }
 
     try {
-        await addBlocked(blocklist, ownerUid, match[1], botToken);
+        if (match[1] === 'block') {
+            await addBlocked(blocklist, ownerUid, match[2], botToken);
+        } else {
+            await removeBlocked(blocklist, ownerUid, match[2], botToken);
+        }
     } catch (error) {
-        console.error('Error saving blocked account:', error);
-        await answerCallbackQuery(botToken, callbackQuery.id, '暂时无法拉黑，请稍后重试');
+        console.error(`Error ${match[1] === 'block' ? 'saving' : 'removing'} blocked account:`, error);
+        await answerCallbackQuery(
+            botToken,
+            callbackQuery.id,
+            `暂时无法${match[1] === 'block' ? '拉黑' : '恢复'}，请稍后重试`
+        );
         return new Response('OK');
     }
 
-    await answerCallbackQuery(botToken, callbackQuery.id, '已拉黑此账号');
+    // Edit the original forwarded message before answering the callback so
+    // answerCallbackQuery remains the final Telegram request. This also keeps
+    // existing tests and Telegram's short callback acknowledgement window
+    // predictable if the edit is rejected for a stale message.
+    await editCallbackKeyboard(botToken, callbackQuery, match[2], match[1] === 'block');
+    await answerCallbackQuery(
+        botToken,
+        callbackQuery.id,
+        match[1] === 'block' ? '已拉黑此账号' : '已恢复此账号'
+    );
 
     return new Response('OK');
 }
@@ -202,6 +406,27 @@ export async function handleWebhook(request, ownerUid, botToken, secretToken, bl
         }
 
         const message = update.message;
+        if (!message || typeof message !== 'object' || Array.isArray(message)) {
+            return new Response('OK');
+        }
+
+        if (!message.chat || message.chat.id === undefined || message.chat.id === null) {
+            return new Response('OK');
+        }
+
+        // Keep a best-effort username -> UID index for administrative commands.
+        // It is intentionally populated before the block check so an already
+        // blocked account can still refresh its known username mapping.
+        await rememberMessageUser(blocklist, ownerUid, message, botToken);
+
+        const managementCommand = parseManagementCommand(message.text);
+        const messageFromOwner = !message.from || message.from.id === undefined || message.from.id === null ||
+            sameUid(message.from.id, ownerUid);
+        if (managementCommand && sameUid(message.chat.id, ownerUid) && messageFromOwner) {
+            await handleManagementCommand(managementCommand, ownerUid, botToken, blocklist);
+            return new Response('OK');
+        }
+
         const reply = message.reply_to_message;
 
         if (reply && sameUid(message.chat && message.chat.id, ownerUid)) {
@@ -218,10 +443,6 @@ export async function handleWebhook(request, ownerUid, botToken, secretToken, bl
         }
 
         if ("/start" === message.text) {
-            return new Response('OK');
-        }
-
-        if (!message.chat || message.chat.id === undefined || message.chat.id === null) {
             return new Response('OK');
         }
 

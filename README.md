@@ -12,6 +12,7 @@
 
 - 🔄 **双向通信** - 轻松接收和回复来自用户的消息
 - 🚫 **一键拉黑** - 点击转发消息下方的按钮即可停止接收指定账号的后续消息
+- 🧰 **远程管理黑名单** - 管理员可使用 `/ban @用户名` 拉黑，使用 `/recover @用户名` 恢复
 - 💾 **无需数据库** - 不配置拉黑持久化时无需数据库；需要跨重启保存名单时可选 Cloudflare KV
 - 🌐 **无需自己的域名** - 使用 Cloudflare Worker 提供的免费域名
 - 🚀 **轻量级部署** - 几分钟内即可完成设置
@@ -67,7 +68,7 @@
    - 添加 `PREFIX`（例如：`public`）
    - 可选：添加运行时 Secret `SECRET_TOKEN` 用于校验 Telegram webhook 请求，并重新部署
    - Workers Builds 页面中的 **Variables and Secrets** 仅用于构建过程，不会自动成为 Worker 运行时变量
-9. 如需让拉黑名单在 Worker 重启和多实例之间保持有效，请创建一个 Cloudflare KV namespace，并在 **Settings** > **Bindings** 中以 `BLOCKLIST` 为变量名绑定它。没有此绑定时，拉黑状态只在当前运行实例中保留。
+9. 如需让拉黑名单和用户名索引在 Worker 重启及多实例之间保持有效，请创建一个 Cloudflare KV namespace，并在 **Settings** > **Bindings** 中以 `BLOCKLIST` 为变量名绑定它。没有此绑定时，这些状态只在当前运行实例中保留。
 10. 点击 **Save and Deploy** 按钮完成部署
 
 使用 Wrangler 时，可以先运行 `npx wrangler kv namespace create BLOCKLIST`，再将命令返回的 namespace ID 填入 `wrangler.toml` 的 `BLOCKLIST` 配置。
@@ -220,6 +221,15 @@ https://open-wegram-bot.username.workers.dev/public/install/123456789/000000000:
 一旦设置完成，任何人给您的 Bot 发送消息，您都会在自己的 Telegram 账号中收到这些消息，并且消息下方会显示发送者的信息。
 
 点击消息下方的 **🚫 拉黑此账号** 按钮后，该账号的新消息会被机器人静默丢弃，不再转发给您。要让名单持久保存，请按上面的说明配置 `BLOCKLIST` KV 绑定。
+
+拉黑后，原消息下方的按钮会变为 **✅ 恢复此账号**，点击即可移出黑名单并重新接收该账号的消息。管理员也可以在与 Bot 的私聊中发送：
+
+```
+/ban @用户名
+/recover @用户名
+```
+
+用户名查找不区分大小写，但 Bot 必须先收到过该账号的消息，才能建立用户名到 Telegram UID 的索引。Telegram Bot API 无法仅凭一个从未见过的用户名查询私聊 UID；这类账号请先让其给 Bot 发一条消息，再执行命令。
 
 升级到支持拉黑的版本后，请重新访问一次安装地址，让 Telegram webhook 开始接收按钮回调。
 
