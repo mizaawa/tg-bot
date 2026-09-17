@@ -162,6 +162,7 @@ test('forwards a message with a blacklist button and blocks later messages', asy
     assert.equal(firstMessage.status, 200);
     assert.equal(telegramCalls.length, 1);
     const keyboard = telegramCalls[0].body.reply_markup.inline_keyboard;
+    assert.equal(keyboard[0][1].text, '🚫 停止转发');
     assert.equal(keyboard[0][1].callback_data, 'block:987654');
 
     const callback = await worker.fetch(
@@ -532,9 +533,15 @@ test('changes the callback button between block and recovery states', async (t) 
     }), {BLOCKLIST: blocked});
 
     assert.equal(blocked.has('blocked:h24ccbb4a:123456:777888'), true);
+    const answerAfterBlock = telegramCalls.find(call => call.url.endsWith('/answerCallbackQuery'));
     const editAfterBlock = telegramCalls.find(call => call.url.endsWith('/editMessageReplyMarkup'));
     assert.equal(editAfterBlock.body.reply_markup.inline_keyboard[0][1].callback_data, 'unblock:777888');
-    assert.equal(editAfterBlock.body.reply_markup.inline_keyboard[0][1].text, '✅ 恢复此账号');
+    assert.equal(editAfterBlock.body.reply_markup.inline_keyboard[0][1].text, '✅ 恢复转发');
+    assert.match(answerAfterBlock.body.text, /停止转发/);
+    assert.equal(
+        telegramCalls.indexOf(answerAfterBlock) < telegramCalls.indexOf(editAfterBlock),
+        true
+    );
 
     await worker.fetch(request({
         callback_query: {
@@ -552,6 +559,91 @@ test('changes the callback button between block and recovery states', async (t) 
     assert.equal(blocked.has('blocked:h24ccbb4a:123456:777888'), false);
     const edits = telegramCalls.filter(call => call.url.endsWith('/editMessageReplyMarkup'));
     assert.equal(edits.at(-1).body.reply_markup.inline_keyboard[0][1].callback_data, 'block:777888');
+});
+
+test('warns when filtering is only stored in the current runtime', async (t) => {
+    const telegramCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+        const body = JSON.parse(init.body);
+        telegramCalls.push({url, body});
+        return new Response(JSON.stringify({ok: true}));
+    };
+    t.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    const webhookUrl = 'https://example.com/public/webhook/555001/runtime-filter-token';
+    const request = (body) => new Request(webhookUrl, {
+        method: 'POST',
+        body: JSON.stringify(body)
+    });
+
+    await worker.fetch(request({
+        callback_query: {
+            id: 'callback-runtime-only',
+            from: {id: 555001},
+            message: {
+                chat: {id: 555001},
+                message_id: 61,
+                reply_markup: {
+                    inline_keyboard: [[
+                        {text: 'From Alice', callback_data: '555002'},
+                        {text: '🚫 停止转发', callback_data: 'block:555002'}
+                    ]]
+                }
+            },
+            data: 'block:555002'
+        }
+    }), {});
+
+    const answer = telegramCalls.find(call => call.url.endsWith('/answerCallbackQuery'));
+    assert.equal(answer.body.show_alert, true);
+    assert.match(answer.body.text, /BLOCKLIST/);
+
+    const callCount = telegramCalls.length;
+    await worker.fetch(request({
+        message: {chat: {id: 555002}, message_id: 62, text: 'filtered'}
+    }), {});
+    assert.equal(telegramCalls.length, callCount);
+});
+
+test('logs Telegram callback API failures without retrying the webhook', async (t) => {
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    const errors = [];
+    globalThis.fetch = async (url) => {
+        if (url.endsWith('/answerCallbackQuery')) {
+            return new Response(JSON.stringify({ok: false, description: 'query is too old'}), {
+                status: 400,
+                headers: {'Content-Type': 'application/json'}
+            });
+        }
+        return new Response(JSON.stringify({ok: true}));
+    };
+    console.error = (...args) => errors.push(args);
+    t.after(() => {
+        globalThis.fetch = originalFetch;
+        console.error = originalConsoleError;
+    });
+
+    const response = await worker.fetch(
+        new Request('https://example.com/public/webhook/123456/telegram-bot-token', {
+            method: 'POST',
+            body: JSON.stringify({
+                callback_query: {
+                    id: 'callback-expired',
+                    from: {id: 123456},
+                    message: {chat: {id: 123456}},
+                    data: 'block:777888'
+                }
+            })
+        }),
+        {BLOCKLIST: new Set()}
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(errors.some(args => String(args[1]).includes('query is too old')), true);
 });
 
 test('does not treat a non-owner management command as an administrative action', async (t) => {

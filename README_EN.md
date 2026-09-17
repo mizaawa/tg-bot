@@ -11,7 +11,7 @@ Users can send messages to you through your bot, and you can reply directly to t
 ## ✨ Features
 
 - 🔄 **Two-Way Communication** - Easily receive and reply to messages from users
-- 🚫 **One-Click Blocking** - Stop receiving future messages from an account from the forwarded message
+- 🚫 **One-Click Forwarding Filter** - Silently discard future messages from an account in the worker
 - 🧰 **Remote Blocklist Management** - Owners can use `/ban @username` and `/recover @username`
 - 💾 **No Database Required** - No database is needed by default; optional Cloudflare KV keeps blocklists across restarts
 - 🌐 **No Personal Domain Required** - Use the free domain provided by Cloudflare Worker
@@ -67,7 +67,7 @@ This is the simplest deployment method, requiring no local development environme
    - Add `PREFIX` (e.g., `public`)
    - Optionally add the runtime Secret `SECRET_TOKEN` to authenticate Telegram webhook requests, then redeploy
    - **Variables and Secrets** under Workers Builds are build-time settings and are not automatically runtime Worker bindings
-9. To keep the blocklist and username index across Worker restarts and multiple instances, create a Cloudflare KV namespace and bind it as `BLOCKLIST` under **Settings** > **Bindings**. Without this binding, these states only last for the current runtime instance.
+9. To keep the forwarding filter and username index reliable across Worker restarts and multiple instances, create a Cloudflare KV namespace and bind it as `BLOCKLIST` under **Settings** > **Bindings**. Without this binding, these states only last for the current runtime instance and disappear after a cold start or when a request reaches another instance.
 10. Click **Save and Deploy** to complete the deployment
 
 With Wrangler, run `npx wrangler kv namespace create BLOCKLIST` first, then put the returned namespace ID into the `BLOCKLIST` configuration in `wrangler.toml`.
@@ -215,9 +215,9 @@ https://open-wegram-bot.username.workers.dev/public/install/123456789/000000000:
 
 Once set up, any messages sent to your Bot will be forwarded to your Telegram account, with sender information displayed below the message.
 
-Click **🚫 Block this account** below a forwarded message to silently discard future messages from that account. Configure the `BLOCKLIST` KV binding as described above if the list must survive restarts.
+Click **🚫 Stop forwarding** below a forwarded message. The bot will still receive messages from that account, but the Worker silently discards them instead of forwarding them to you. This is not a Telegram account ban; the Telegram Bot API cannot ban a private-chat user.
 
-After blocking, the button on the forwarded message becomes **✅ Restore this account**. Click it to remove the account from the blocklist and resume delivery. The owner can also send these commands in the private chat with the bot:
+After filtering, the button becomes **✅ Resume forwarding**. Click it to remove the account from the filter and resume delivery. The owner can also send these commands in the private chat with the bot:
 
 ```
 /ban @username
@@ -226,7 +226,9 @@ After blocking, the button on the forwarded message becomes **✅ Restore this a
 
 Username matching is case-insensitive, but the bot must have received a message from the account first so it can remember the username-to-Telegram-UID mapping. Telegram's Bot API cannot resolve a private-chat UID from a username it has never seen; ask that account to message the bot once before using these commands.
 
-After upgrading to this version, visit the install URL once more so Telegram updates the webhook to deliver button callbacks.
+After upgrading, you must visit the install URL once more so Telegram updates the webhook to deliver `callback_query` updates. Otherwise the button will keep spinning and have no effect.
+
+Cloudflare deployments require a `BLOCKLIST` KV binding for reliable cross-request storage. Without it, the button warns that the filter only applies to the current runtime instance; a cold start or another instance can forward messages again.
 
 Vercel, Deno, Netlify, and EdgeOne do not create a shared KV automatically. Those deployments need a compatible persistent adapter in the entry point; otherwise the fallback list is limited to the current runtime instance.
 

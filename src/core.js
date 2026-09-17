@@ -80,7 +80,22 @@ export async function postToTelegramApi(token, method, body) {
     });
 }
 
-async function answerCallbackQuery(botToken, callbackQueryId, text) {
+async function ensureTelegramApiSuccess(response, method) {
+    let result = null;
+    try {
+        result = await response.clone().json();
+    } catch {
+        // HTTP status still provides a useful failure when Telegram does not
+        // return its usual JSON envelope.
+    }
+
+    if (!response.ok || (result && result.ok === false)) {
+        const detail = result && result.description ? result.description : `HTTP ${response.status}`;
+        throw new Error(`${method} failed: ${detail}`);
+    }
+}
+
+async function answerCallbackQuery(botToken, callbackQueryId, text, showAlert = false) {
     if (!callbackQueryId) {
         return;
     }
@@ -90,20 +105,25 @@ async function answerCallbackQuery(botToken, callbackQueryId, text) {
         if (text) {
             body.text = text;
         }
-        await postToTelegramApi(botToken, 'answerCallbackQuery', body);
+        if (showAlert) {
+            body.show_alert = true;
+        }
+        const response = await postToTelegramApi(botToken, 'answerCallbackQuery', body);
+        await ensureTelegramApiSuccess(response, 'answerCallbackQuery');
     } catch (error) {
         // A callback answer is cosmetic. Do not turn a successfully persisted
-        // block into a webhook retry when Telegram is temporarily unavailable.
+        // filtering change into a webhook retry when Telegram is unavailable.
         console.error('Error answering callback query:', error);
     }
 }
 
 async function sendOwnerMessage(botToken, ownerUid, text) {
     try {
-        await postToTelegramApi(botToken, 'sendMessage', {
+        const response = await postToTelegramApi(botToken, 'sendMessage', {
             chat_id: parseInt(ownerUid),
             text
         });
+        await ensureTelegramApiSuccess(response, 'sendMessage');
     } catch (error) {
         // Management feedback must not make Telegram retry the webhook. The
         // state operation itself is handled by the caller before this point.
@@ -128,7 +148,7 @@ function stateKeyboardForCallback(callbackQuery, senderUid, blocked) {
     const current = message && message.reply_markup && message.reply_markup.inline_keyboard;
     const keyboard = cloneInlineKeyboard(current);
     const action = {
-        text: blocked ? '✅ 恢复此账号' : '🚫 拉黑此账号',
+        text: blocked ? '✅ 恢复转发' : '🚫 停止转发',
         callback_data: `${blocked ? 'unblock' : 'block'}:${senderUid}`
     };
 
@@ -168,11 +188,12 @@ async function editCallbackKeyboard(botToken, callbackQuery, senderUid, blocked)
     }
 
     try {
-        await postToTelegramApi(botToken, 'editMessageReplyMarkup', {
+        const response = await postToTelegramApi(botToken, 'editMessageReplyMarkup', {
             chat_id: message.chat.id,
             message_id: message.message_id,
             reply_markup: stateKeyboardForCallback(callbackQuery, senderUid, blocked)
         });
+        await ensureTelegramApiSuccess(response, 'editMessageReplyMarkup');
     } catch (error) {
         // A stale/deleted forwarded message should not undo a successful list
         // mutation. The next webhook can still use the persisted state.
@@ -262,10 +283,16 @@ async function handleManagementCommand(command, ownerUid, botToken, blocklist) {
     try {
         if (command.action === 'ban') {
             await addBlocked(blocklist, ownerUid, senderUid, botToken);
-            await sendOwnerMessage(botToken, ownerUid, `已拉黑 @${username}`);
+            await sendOwnerMessage(
+                botToken,
+                ownerUid,
+                blocklist
+                    ? `已停止转发 @${username} 的后续消息`
+                    : `已临时停止转发 @${username} 的消息；未配置 BLOCKLIST，运行实例重启后会失效`
+            );
         } else {
             await removeBlocked(blocklist, ownerUid, senderUid, botToken);
-            await sendOwnerMessage(botToken, ownerUid, `已恢复 @${username}`);
+            await sendOwnerMessage(botToken, ownerUid, `已恢复转发 @${username} 的消息`);
         }
     } catch (error) {
         console.error(`Error handling /${command.action}:`, error);
@@ -330,7 +357,7 @@ async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist)
     // A callback is only allowed to mutate the list when it was clicked by the
     // configured owner in the owner's private chat.
     if (!sameUid(callbackOwnerUid, ownerUid) || !sameUid(callbackChatUid, ownerUid)) {
-        await answerCallbackQuery(botToken, callbackQuery && callbackQuery.id, '无权操作');
+        await answerCallbackQuery(botToken, callbackQuery && callbackQuery.id, '无权操作', true);
         return new Response('OK');
     }
 
@@ -343,7 +370,7 @@ async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist)
             await answerCallbackQuery(botToken, callbackQuery.id);
             return new Response('OK');
         }
-        await answerCallbackQuery(botToken, callbackQuery.id, '无效的操作');
+        await answerCallbackQuery(botToken, callbackQuery.id, '无效的操作', true);
         return new Response('OK');
     }
 
@@ -358,21 +385,29 @@ async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist)
         await answerCallbackQuery(
             botToken,
             callbackQuery.id,
-            `暂时无法${match[1] === 'block' ? '拉黑' : '恢复'}，请稍后重试`
+            `暂时无法${match[1] === 'block' ? '停止转发' : '恢复转发'}，请稍后重试`,
+            true
         );
         return new Response('OK');
     }
 
-    // Edit the original forwarded message before answering the callback so
-    // answerCallbackQuery remains the final Telegram request. This also keeps
-    // existing tests and Telegram's short callback acknowledgement window
-    // predictable if the edit is rejected for a stale message.
-    await editCallbackKeyboard(botToken, callbackQuery, match[2], match[1] === 'block');
+    const isBlocking = match[1] === 'block';
+    const feedback = isBlocking
+        ? (blocklist
+            ? '已停止转发此账号的后续消息'
+            : '已临时停止转发；未配置 BLOCKLIST，运行实例重启后会失效')
+        : '已恢复转发此账号的消息';
+
+    // Acknowledge first so Telegram immediately clears the button's loading
+    // state. Editing an old or deleted message must not make the click appear
+    // to have failed after the filtering state was already changed.
     await answerCallbackQuery(
         botToken,
         callbackQuery.id,
-        match[1] === 'block' ? '已拉黑此账号' : '已恢复此账号'
+        feedback,
+        isBlocking && !blocklist
     );
+    await editCallbackKeyboard(botToken, callbackQuery, match[2], isBlocking);
 
     return new Response('OK');
 }
@@ -467,7 +502,7 @@ export async function handleWebhook(request, ownerUid, botToken, secretToken, bl
             const ik = [[
                 senderButton,
                 {
-                    text: '🚫 拉黑此账号',
+                    text: '🚫 停止转发',
                     callback_data: `block:${senderUid}`
                 }
             ]];
