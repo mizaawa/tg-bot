@@ -181,7 +181,10 @@ test('forwards a message with a blacklist button and blocks later messages', asy
     );
 
     assert.equal(callback.status, 200);
-    assert.equal(telegramCalls[telegramCalls.length - 1].url.endsWith('/answerCallbackQuery'), true);
+    const answer = await callback.json();
+    assert.equal(answer.method, 'answerCallbackQuery');
+    assert.equal(answer.callback_query_id, 'callback-1');
+    assert.match(answer.text, /停止转发/);
     assert.equal(blocked.has('blocked:h24ccbb4a:123456:987654'), true);
 
     const blockedMessage = await worker.fetch(
@@ -195,7 +198,7 @@ test('forwards a message with a blacklist button and blocks later messages', asy
     );
 
     assert.equal(blockedMessage.status, 200);
-    assert.equal(telegramCalls.length, 2);
+    assert.equal(telegramCalls.length, 1);
 });
 
 test('does not let another Telegram user trigger a blacklist callback', async (t) => {
@@ -229,8 +232,13 @@ test('does not let another Telegram user trigger a blacklist callback', async (t
 
     assert.equal(response.status, 200);
     assert.equal(blocked.size, 0);
-    assert.equal(telegramCalls.length, 1);
-    assert.equal(telegramCalls[0].url.endsWith('/answerCallbackQuery'), true);
+    assert.equal(telegramCalls.length, 0);
+    assert.deepEqual(await response.json(), {
+        method: 'answerCallbackQuery',
+        callback_query_id: 'callback-2',
+        text: '无权操作',
+        show_alert: true
+    });
 });
 
 test('keeps the sender button usable for owner replies', async (t) => {
@@ -523,7 +531,7 @@ test('changes the callback button between block and recovery states', async (t) 
         ]]
     };
 
-    await worker.fetch(request({
+    const blockResponse = await worker.fetch(request({
         callback_query: {
             id: 'callback-toggle-1',
             from: {id: 123456},
@@ -533,17 +541,16 @@ test('changes the callback button between block and recovery states', async (t) 
     }), {BLOCKLIST: blocked});
 
     assert.equal(blocked.has('blocked:h24ccbb4a:123456:777888'), true);
-    const answerAfterBlock = telegramCalls.find(call => call.url.endsWith('/answerCallbackQuery'));
+    const answerAfterBlock = await blockResponse.json();
     const editAfterBlock = telegramCalls.find(call => call.url.endsWith('/editMessageReplyMarkup'));
     assert.equal(editAfterBlock.body.reply_markup.inline_keyboard[0][1].callback_data, 'unblock:777888');
     assert.equal(editAfterBlock.body.reply_markup.inline_keyboard[0][1].text, '✅ 恢复转发');
-    assert.match(answerAfterBlock.body.text, /停止转发/);
-    assert.equal(
-        telegramCalls.indexOf(answerAfterBlock) < telegramCalls.indexOf(editAfterBlock),
-        true
-    );
+    assert.equal(answerAfterBlock.method, 'answerCallbackQuery');
+    assert.equal(answerAfterBlock.callback_query_id, 'callback-toggle-1');
+    assert.match(answerAfterBlock.text, /停止转发/);
+    assert.equal(telegramCalls.length, 1);
 
-    await worker.fetch(request({
+    const recoveryResponse = await worker.fetch(request({
         callback_query: {
             id: 'callback-toggle-2',
             from: {id: 123456},
@@ -557,6 +564,7 @@ test('changes the callback button between block and recovery states', async (t) 
     }), {BLOCKLIST: blocked});
 
     assert.equal(blocked.has('blocked:h24ccbb4a:123456:777888'), false);
+    assert.match((await recoveryResponse.json()).text, /恢复转发/);
     const edits = telegramCalls.filter(call => call.url.endsWith('/editMessageReplyMarkup'));
     assert.equal(edits.at(-1).body.reply_markup.inline_keyboard[0][1].callback_data, 'block:777888');
 });
@@ -579,7 +587,7 @@ test('warns when filtering is only stored in the current runtime', async (t) => 
         body: JSON.stringify(body)
     });
 
-    await worker.fetch(request({
+    const response = await worker.fetch(request({
         callback_query: {
             id: 'callback-runtime-only',
             from: {id: 555001},
@@ -597,9 +605,10 @@ test('warns when filtering is only stored in the current runtime', async (t) => 
         }
     }), {});
 
-    const answer = telegramCalls.find(call => call.url.endsWith('/answerCallbackQuery'));
-    assert.equal(answer.body.show_alert, true);
-    assert.match(answer.body.text, /BLOCKLIST/);
+    const answer = await response.json();
+    assert.equal(answer.method, 'answerCallbackQuery');
+    assert.equal(answer.show_alert, true);
+    assert.match(answer.text, /BLOCKLIST/);
 
     const callCount = telegramCalls.length;
     await worker.fetch(request({
@@ -608,14 +617,14 @@ test('warns when filtering is only stored in the current runtime', async (t) => 
     assert.equal(telegramCalls.length, callCount);
 });
 
-test('logs Telegram callback API failures without retrying the webhook', async (t) => {
+test('logs Telegram keyboard API failures without retrying the webhook', async (t) => {
+    const blocked = new Set();
     const originalFetch = globalThis.fetch;
     const originalConsoleError = console.error;
     const errors = [];
     globalThis.fetch = async (url) => {
-        if (url.endsWith('/answerCallbackQuery')) {
-            return new Response(JSON.stringify({ok: false, description: 'query is too old'}), {
-                status: 400,
+        if (url.endsWith('/editMessageReplyMarkup')) {
+            return new Response(JSON.stringify({ok: false, description: 'message is not modified'}), {
                 headers: {'Content-Type': 'application/json'}
             });
         }
@@ -634,16 +643,24 @@ test('logs Telegram callback API failures without retrying the webhook', async (
                 callback_query: {
                     id: 'callback-expired',
                     from: {id: 123456},
-                    message: {chat: {id: 123456}},
+                    message: {
+                        chat: {id: 123456},
+                        message_id: 63,
+                        reply_markup: {
+                            inline_keyboard: [[{text: 'Toggle forwarding', callback_data: 'block:777888'}]]
+                        }
+                    },
                     data: 'block:777888'
                 }
             })
         }),
-        {BLOCKLIST: new Set()}
+        {BLOCKLIST: blocked}
     );
 
     assert.equal(response.status, 200);
-    assert.equal(errors.some(args => String(args[1]).includes('query is too old')), true);
+    assert.equal((await response.json()).method, 'answerCallbackQuery');
+    assert.equal(blocked.has('blocked:h24ccbb4a:123456:777888'), true);
+    assert.equal(errors.some(args => String(args[1]).includes('message is not modified')), true);
 });
 
 test('does not treat a non-owner management command as an administrative action', async (t) => {

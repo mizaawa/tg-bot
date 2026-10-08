@@ -13,6 +13,8 @@ import {
     resolveBlocklistStore
 } from './blocklist.js';
 
+const CALLBACK_OPERATION_TIMEOUT_MS = 3000;
+
 export function jsonResponse(data, status = 200) {
     return new Response(JSON.stringify(data), {
         status,
@@ -72,18 +74,40 @@ function extractSenderUid(reply) {
     return null;
 }
 
-export async function postToTelegramApi(token, method, body) {
+export async function postToTelegramApi(token, method, body, signal) {
     return fetch(`https://api.telegram.org/bot${token}/${method}`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        ...(signal ? {signal} : {})
     });
+}
+
+async function withCallbackTimeout(operation, label, onTimeout) {
+    let timer;
+    try {
+        return await Promise.race([
+            Promise.resolve().then(operation),
+            new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    const error = new Error(`${label} timed out`);
+                    error.name = 'TimeoutError';
+                    reject(error);
+                    if (onTimeout) {
+                        onTimeout();
+                    }
+                }, CALLBACK_OPERATION_TIMEOUT_MS);
+            })
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function ensureTelegramApiSuccess(response, method) {
     let result = null;
     try {
-        result = await response.clone().json();
+        result = await response.json();
     } catch {
         // HTTP status still provides a useful failure when Telegram does not
         // return its usual JSON envelope.
@@ -95,26 +119,21 @@ async function ensureTelegramApiSuccess(response, method) {
     }
 }
 
-async function answerCallbackQuery(botToken, callbackQueryId, text, showAlert = false) {
+function callbackResponse(callbackQueryId, text, showAlert = false) {
     if (!callbackQueryId) {
-        return;
+        return new Response('OK');
     }
 
-    try {
-        const body = {callback_query_id: callbackQueryId};
-        if (text) {
-            body.text = text;
-        }
-        if (showAlert) {
-            body.show_alert = true;
-        }
-        const response = await postToTelegramApi(botToken, 'answerCallbackQuery', body);
-        await ensureTelegramApiSuccess(response, 'answerCallbackQuery');
-    } catch (error) {
-        // A callback answer is cosmetic. Do not turn a successfully persisted
-        // filtering change into a webhook retry when Telegram is unavailable.
-        console.error('Error answering callback query:', error);
+    // Telegram executes Bot API methods returned in a webhook response. This
+    // clears the click without waiting for a second outbound HTTP request.
+    const body = {method: 'answerCallbackQuery', callback_query_id: callbackQueryId};
+    if (text) {
+        body.text = text;
     }
+    if (showAlert) {
+        body.show_alert = true;
+    }
+    return jsonResponse(body);
 }
 
 async function sendOwnerMessage(botToken, ownerUid, text) {
@@ -187,13 +206,16 @@ async function editCallbackKeyboard(botToken, callbackQuery, senderUid, blocked)
         return;
     }
 
+    const controller = new AbortController();
     try {
-        const response = await postToTelegramApi(botToken, 'editMessageReplyMarkup', {
-            chat_id: message.chat.id,
-            message_id: message.message_id,
-            reply_markup: stateKeyboardForCallback(callbackQuery, senderUid, blocked)
-        });
-        await ensureTelegramApiSuccess(response, 'editMessageReplyMarkup');
+        await withCallbackTimeout(async () => {
+            const response = await postToTelegramApi(botToken, 'editMessageReplyMarkup', {
+                chat_id: message.chat.id,
+                message_id: message.message_id,
+                reply_markup: stateKeyboardForCallback(callbackQuery, senderUid, blocked)
+            }, controller.signal);
+            await ensureTelegramApiSuccess(response, 'editMessageReplyMarkup');
+        }, 'editMessageReplyMarkup', () => controller.abort());
     } catch (error) {
         // A stale/deleted forwarded message should not undo a successful list
         // mutation. The next webhook can still use the persisted state.
@@ -346,7 +368,7 @@ export async function handleUninstall(botToken) {
     }
 }
 
-async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist) {
+async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist, waitUntil) {
     if (!callbackQuery || typeof callbackQuery !== 'object' || Array.isArray(callbackQuery)) {
         return new Response('OK');
     }
@@ -357,8 +379,7 @@ async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist)
     // A callback is only allowed to mutate the list when it was clicked by the
     // configured owner in the owner's private chat.
     if (!sameUid(callbackOwnerUid, ownerUid) || !sameUid(callbackChatUid, ownerUid)) {
-        await answerCallbackQuery(botToken, callbackQuery && callbackQuery.id, '无权操作', true);
-        return new Response('OK');
+        return callbackResponse(callbackQuery.id, '无权操作', true);
     }
 
     const data = callbackQuery.data === undefined || callbackQuery.data === null ? '' : String(callbackQuery.data);
@@ -367,28 +388,27 @@ async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist)
         // The first sender button used raw numeric callback data in older
         // forwarded messages. Keep those callbacks inert and silent.
         if (/^-?\d+$/.test(data)) {
-            await answerCallbackQuery(botToken, callbackQuery.id);
-            return new Response('OK');
+            return callbackResponse(callbackQuery.id);
         }
-        await answerCallbackQuery(botToken, callbackQuery.id, '无效的操作', true);
-        return new Response('OK');
+        return callbackResponse(callbackQuery.id, '无效的操作', true);
     }
 
     try {
-        if (match[1] === 'block') {
-            await addBlocked(blocklist, ownerUid, match[2], botToken);
-        } else {
-            await removeBlocked(blocklist, ownerUid, match[2], botToken);
-        }
+        await withCallbackTimeout(
+            () => match[1] === 'block'
+                ? addBlocked(blocklist, ownerUid, match[2], botToken)
+                : removeBlocked(blocklist, ownerUid, match[2], botToken),
+            'Blocklist update'
+        );
     } catch (error) {
         console.error(`Error ${match[1] === 'block' ? 'saving' : 'removing'} blocked account:`, error);
-        await answerCallbackQuery(
-            botToken,
+        return callbackResponse(
             callbackQuery.id,
-            `暂时无法${match[1] === 'block' ? '停止转发' : '恢复转发'}，请稍后重试`,
+            error?.name === 'TimeoutError'
+                ? '操作超时，结果尚未确认，请稍后重试'
+                : `暂时无法${match[1] === 'block' ? '停止转发' : '恢复转发'}，请稍后重试`,
             true
         );
-        return new Response('OK');
     }
 
     const isBlocking = match[1] === 'block';
@@ -398,25 +418,28 @@ async function handleCallbackQuery(callbackQuery, ownerUid, botToken, blocklist)
             : '已临时停止转发；未配置 BLOCKLIST，运行实例重启后会失效')
         : '已恢复转发此账号的消息';
 
-    // Acknowledge first so Telegram immediately clears the button's loading
-    // state. Editing an old or deleted message must not make the click appear
-    // to have failed after the filtering state was already changed.
-    await answerCallbackQuery(
-        botToken,
+    const keyboardUpdate = editCallbackKeyboard(botToken, callbackQuery, match[2], isBlocking);
+    if (typeof waitUntil === 'function') {
+        waitUntil(keyboardUpdate);
+    } else {
+        // Runtimes without a background-task hook must keep the request alive
+        // for the edit; its timeout still bounds the callback response delay.
+        await keyboardUpdate;
+    }
+
+    return callbackResponse(
         callbackQuery.id,
         feedback,
         isBlocking && !blocklist
     );
-    await editCallbackKeyboard(botToken, callbackQuery, match[2], isBlocking);
-
-    return new Response('OK');
 }
 
-export async function handleWebhook(request, ownerUid, botToken, secretToken, blocklist) {
+export async function handleWebhook(request, ownerUid, botToken, secretToken, blocklist, waitUntil) {
     if (secretToken && typeof secretToken === 'object') {
         const options = secretToken;
         secretToken = typeof options.secretToken === 'string' ? options.secretToken : '';
         blocklist = blocklist || options;
+        waitUntil = waitUntil || options.waitUntil;
     }
 
     if (secretToken && secretToken !== request.headers.get('X-Telegram-Bot-Api-Secret-Token')) {
@@ -433,7 +456,7 @@ export async function handleWebhook(request, ownerUid, botToken, secretToken, bl
         }
 
         if (update.callback_query !== undefined && update.callback_query !== null) {
-            return await handleCallbackQuery(update.callback_query, ownerUid, botToken, blocklist);
+            return await handleCallbackQuery(update.callback_query, ownerUid, botToken, blocklist, waitUntil);
         }
 
         if (!update.message) {
@@ -542,7 +565,8 @@ export async function handleRequest(request, config = {}) {
         store,
         kv,
         stateStore,
-        state
+        state,
+        waitUntil
     } = config;
     const configuredBlocklist = resolveBlocklistStore(
         blocklist || blacklist || blacklistStore || blocklistStore || blockStore || storage || store || kv || stateStore || state
@@ -566,7 +590,7 @@ export async function handleRequest(request, config = {}) {
     }
 
     if (match = path.match(WEBHOOK_PATTERN)) {
-        return handleWebhook(request, match[1], match[2], secretToken, configuredBlocklist);
+        return handleWebhook(request, match[1], match[2], secretToken, configuredBlocklist, waitUntil);
     }
 
     return new Response('Not Found', {status: 404});

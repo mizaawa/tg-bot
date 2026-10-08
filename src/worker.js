@@ -37,6 +37,7 @@ export default {
         const config = {
             prefix: env.PREFIX || 'public',
             secretToken,
+            waitUntil: ctx && typeof ctx.waitUntil === 'function' ? promise => ctx.waitUntil(promise) : undefined,
             // BLOCKLIST is a Cloudflare KV namespace binding. The aliases keep
             // existing deployments flexible while the documented name remains
             // BLOCKLIST.
